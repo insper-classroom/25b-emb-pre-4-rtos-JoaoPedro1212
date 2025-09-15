@@ -1,102 +1,91 @@
+// exe4/main.c
 #include <FreeRTOS.h>
 #include <task.h>
 #include <semphr.h>
 #include <queue.h>
-
 #include "pico/stdlib.h"
-#include <stdio.h>
+#include "hardware/gpio.h"
 
-const int BTN_PIN_R = 28;
-const int BTN_PIN_G = 26;
-const int LED_PIN_R = 4;
-const int LED_PIN_G = 6;
+#define BTN_R 28
+#define BTN_G 26
+#define LED_R 4
+#define LED_G 6
 
-QueueHandle_t xQueueButId;      // fila do LED R
-QueueHandle_t xQueueButId_g;    // fila do LED G
-SemaphoreHandle_t xSemaphore_r; // semáforo do botão R
+static QueueHandle_t qR, qG;     // R recebe delay pela task, G recebe pela ISR
+static SemaphoreHandle_t semR;   // semáforo liberado pela ISR do botão R
 
-void btn_callback(uint gpio, uint32_t events) {
+static void isr_btn(uint gpio, uint32_t events) {
   if (!(events & GPIO_IRQ_EDGE_FALL)) return;
 
-  if (gpio == BTN_PIN_R) {
-    xSemaphoreGiveFromISR(xSemaphore_r, 0);
-  } else if (gpio == BTN_PIN_G) {
-    static int delay_g = 0;
-    delay_g = (delay_g < 1000) ? delay_g + 100 : 100;
-
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    xQueueSendFromISR(xQueueButId_g, &delay_g, &xHigherPriorityTaskWoken);
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+  if (gpio == BTN_R) {
+    xSemaphoreGiveFromISR(semR, NULL);
+  } else if (gpio == BTN_G) {
+    static int dG = 0;
+    dG = (dG < 1000) ? dG + 100 : 100;
+    BaseType_t w = pdFALSE;
+    xQueueSendFromISR(qG, &dG, &w);
+    portYIELD_FROM_ISR(w);
   }
 }
 
-void led_1_task(void *p) {
-  gpio_init(LED_PIN_R);
-  gpio_set_dir(LED_PIN_R, GPIO_OUT);
+static void led_r_task(void *p) {
+  gpio_init(LED_R);
+  gpio_set_dir(LED_R, GPIO_OUT);
+  gpio_put(LED_R, 0);
 
-  int delay = 0;
-  while (true) {
-    if (xQueueReceive(xQueueButId, &delay, 0)) {}
-
-    if (delay > 0) {
-      gpio_put(LED_PIN_R, 1);
-      vTaskDelay(pdMS_TO_TICKS(delay));
-      gpio_put(LED_PIN_R, 0);
-      vTaskDelay(pdMS_TO_TICKS(delay));
+  int d = 0;
+  while (1) {
+    if (xQueueReceive(qR, &d, 0)) {}
+    if (xSemaphoreTake(semR, portMAX_DELAY) == pdTRUE && d > 0) {
+      gpio_put(LED_R, 1); vTaskDelay(pdMS_TO_TICKS(d));
+      gpio_put(LED_R, 0); vTaskDelay(pdMS_TO_TICKS(d));
     }
   }
 }
 
-void btn_1_task(void *p) {
-  gpio_init(BTN_PIN_R);
-  gpio_set_dir(BTN_PIN_R, GPIO_IN);
-  gpio_pull_up(BTN_PIN_R);
-  gpio_set_irq_enabled_with_callback(BTN_PIN_R, GPIO_IRQ_EDGE_FALL, true, &btn_callback);
+static void btn_r_task(void *p) {
+  gpio_init(BTN_R);
+  gpio_set_dir(BTN_R, GPIO_IN);
+  gpio_pull_up(BTN_R);
+  gpio_set_irq_enabled_with_callback(BTN_R, GPIO_IRQ_EDGE_FALL, true, &isr_btn);
 
-  int delay = 0;
-  while (true) {
-    if (xSemaphoreTake(xSemaphore_r, pdMS_TO_TICKS(500)) == pdTRUE) {
-      delay = (delay < 1000) ? delay + 100 : 100;
-      xQueueSend(xQueueButId, &delay, 0);
+  int d = 0;
+  while (1) {
+    if (xSemaphoreTake(semR, portMAX_DELAY) == pdTRUE) {
+      d = (d < 1000) ? d + 100 : 100;
+      xQueueSend(qR, &d, 0);
     }
   }
 }
 
-void led_2_task(void *p) {
-  gpio_init(LED_PIN_G);
-  gpio_set_dir(LED_PIN_G, GPIO_OUT);
+static void led_g_task(void *p) {
+  gpio_init(LED_G);
+  gpio_set_dir(LED_G, GPIO_OUT);
+  gpio_put(LED_G, 0);
 
-  int delay = 0;
-  while (true) {
-    if (xQueueReceive(xQueueButId_g, &delay, portMAX_DELAY)) {}
-
-    if (delay > 0) {
-      gpio_put(LED_PIN_G, 1);
-      vTaskDelay(pdMS_TO_TICKS(delay));
-      gpio_put(LED_PIN_G, 0);
-      vTaskDelay(pdMS_TO_TICKS(delay));
+  int d = 0;
+  while (1) {
+    if (xQueueReceive(qG, &d, portMAX_DELAY)) {
+      gpio_put(LED_G, 1); vTaskDelay(pdMS_TO_TICKS(d));
+      gpio_put(LED_G, 0); vTaskDelay(pdMS_TO_TICKS(d));
     }
   }
 }
 
-int main() {
-  stdio_init_all();
-  printf("Start RTOS\n");
+int main(void) {
+  // sem prints
 
-  xQueueButId   = xQueueCreate(32, sizeof(int));
-  xQueueButId_g = xQueueCreate(32, sizeof(int));
-  xSemaphore_r  = xSemaphoreCreateBinary();
+  qR   = xQueueCreate(8, sizeof(int));
+  qG   = xQueueCreate(8, sizeof(int));
+  semR = xSemaphoreCreateBinary();
 
-  // botão G também usa a MESMA callback (apenas habilita a IRQ)
-  gpio_init(BTN_PIN_G);
-  gpio_set_dir(BTN_PIN_G, GPIO_IN);
-  gpio_pull_up(BTN_PIN_G);
-  gpio_set_irq_enabled(BTN_PIN_G, GPIO_IRQ_EDGE_FALL, true);
+  gpio_init(BTN_G); gpio_set_dir(BTN_G, GPIO_IN); gpio_pull_up(BTN_G);
+  gpio_set_irq_enabled(BTN_G, GPIO_IRQ_EDGE_FALL, true); // mesma callback já registrada
 
-  xTaskCreate(led_1_task, "LED_R", 256, NULL, 1, NULL);
-  xTaskCreate(btn_1_task, "BTN_R", 256, NULL, 2, NULL);
-  xTaskCreate(led_2_task, "LED_G", 256, NULL, 1, NULL);
+  xTaskCreate(led_r_task, "LED_R", 256, NULL, 1, NULL);
+  xTaskCreate(btn_r_task, "BTN_R", 256, NULL, 2, NULL);
+  xTaskCreate(led_g_task, "LED_G", 256, NULL, 1, NULL);
 
   vTaskStartScheduler();
-  while (true) {}
+  while (1) {}
 }
