@@ -1,30 +1,48 @@
 #include <FreeRTOS.h>
 #include <task.h>
+#include <semphr.h>
+#include <queue.h>
 
 #include "pico/stdlib.h"
-#include "hardware/gpio.h"
+#include <stdio.h>
 
-#define LED_R 4
-#define LED_G 6
-#define BLINK_MS 250
+const int LED_PIN_R = 4;
+const int LED_PIN_G = 6;
 
-static void led_task(void *p) {
-  int pin = (int)(uintptr_t)p;
-  gpio_init(pin);
-  gpio_set_dir(pin, GPIO_OUT);
-  gpio_put(pin, 0);
+void led_1_task(void *p) {
+  gpio_init(LED_PIN_R);
+  gpio_set_dir(LED_PIN_R, GPIO_OUT);
 
-  while (1) {
-    gpio_put(pin, 1);
-    vTaskDelay(pdMS_TO_TICKS(BLINK_MS));
-    gpio_put(pin, 0);
-    vTaskDelay(pdMS_TO_TICKS(BLINK_MS));
+  int delay = 250;
+  while (true) {
+    gpio_put(LED_PIN_R, 1);
+    vTaskDelay(pdMS_TO_TICKS(delay));
+    gpio_put(LED_PIN_R, 0);
+    vTaskDelay(pdMS_TO_TICKS(delay));
   }
 }
 
-int main(void) {
-  xTaskCreate(led_task, "LED_R", 256, (void*)(uintptr_t)LED_R, 1, NULL);
-  xTaskCreate(led_task, "LED_G", 256, (void*)(uintptr_t)LED_G, 1, NULL);
+void led_2_task(void *p) {
+  gpio_init(LED_PIN_G);
+  gpio_set_dir(LED_PIN_G, GPIO_OUT);
+
+  int delay = 250;
+  while (true) {
+    gpio_put(LED_PIN_G, 1);
+    vTaskDelay(pdMS_TO_TICKS(delay));
+    gpio_put(LED_PIN_G, 0);
+    vTaskDelay(pdMS_TO_TICKS(delay));
+  }
+}
+
+int main() {
+  stdio_init_all();
+  printf("Start RTOS \n");
+  xTaskCreate(led_1_task, "LED_Task 1", 256, NULL, 1, NULL);
+
+  xTaskCreate(led_2_task, "LED_Task 2", 256, NULL, 1, NULL);
+
   vTaskStartScheduler();
-  while (1) {}
+
+  while (true);
 }
